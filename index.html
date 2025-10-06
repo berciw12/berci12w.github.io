@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Űrhajó kereső | 2Bit</title>
+    <link rel="stylesheet" href="tailwind.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117;
+            color: #e5e7eb;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1000px;
+            width: 95%;
+            margin-top: 2rem;
+        }
+        .game-board {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            grid-template-rows: repeat(12, 1fr);
+            aspect-ratio: 1 / 1;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+            border: 4px solid #3b82f6;
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
+            background-color: #161b22;
+        }
+        .cell {
+            border: 1px solid #28303d;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background-color 0.1s;
+            user-select: none;
+            font-size: clamp(0.6rem, 2vw, 1.2rem);
+        }
+        .cell:hover:not(.probed) {
+            background-color: #1e2430;
+        }
+        .miss {
+            background-color: #10b981;
+            color: #1f2937;
+        }
+        .sunk {
+            background-color: #f59e0b;
+        }
+        .disabled {
+            cursor: default !important;
+            opacity: 0.7;
+        }
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 1.5rem 2.5rem; 
+            background: linear-gradient(135deg, #1f2937, #374151);
+            border-radius: 0.75rem;
+            border: 3px solid #3b82f6;
+            box-shadow: 0 0 50px rgba(59, 130, 246, 0.7);
+            z-index: 100;
+            text-align: center;
+            max-width: 90%;
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translate(-50%, -60%); }
+            to { opacity: 1; transform: translate(-50%, -50%); }
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div id="app" class="container">
+        <h1 class="text-4xl font-bold text-center text-blue-400 mb-6 tracking-wider">
+            Űrhajó kereső
+        </h1>
+
+        <div class="flex flex-col md:flex-row justify-center items-start gap-8">
+            <div class="w-full md:w-1/3 space-y-4 p-4 bg-gray-800 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-2xl font-semibold text-white">Információk</h2>
+
+                <div class="flex justify-between items-center text-lg py-1 border-b border-gray-700">
+                    <span class="text-gray-400">Mode:</span>
+                    <span id="modeDisplay" class="font-bold text-yellow-300 capitalize">Standard</span>
+                </div>
+                <div class="flex justify-between items-center text-lg py-1 border-b border-gray-700">
+                    <span class="text-gray-400">Eddigi lépések:</span>
+                    <span id="movesMadeDisplay" class="font-bold text-blue-300">0</span>
+                </div>
+                <div id="timeAttackStats" class="space-y-2">
+                </div>
+                <div class="flex justify-between items-center text-lg py-1">
+                    <span class="text-gray-400">Megtalálandó hajók:</span>
+                    <span id="shipsRemainingDisplay" class="font-bold text-orange-300">7</span>
+                </div>
+
+                <div class="pt-4 space-y-3">
+                    <button onclick="startGame('standard')" class="w-full py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 transition font-bold text-white shadow-md shadow-blue-500/50">
+                        Új Standard játék
+                    </button>
+                    <button onclick="startGame('timeAttack')" class="w-full py-3 px-4 rounded-lg bg-yellow-600 hover:bg-yellow-700 transition font-bold text-white shadow-md shadow-yellow-500/50">
+                        Új Time Attack játék
+                    </button>
+                </div>
+
+                <p class="text-xs text-gray-500 pt-4">
+                    Találd meg a 7 db hajót a mezőben a lehető legkevesebb lépésből.
+                </p>
+            </div>
+
+            <div id="gameBoardContainer" class="w-full md:w-2/3 max-w-lg">
+                <div id="gameBoard" class="game-board">
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="customModal" class="hidden"></div>
+
+    <script>
+        const BOARD_SIZE = 12;
+        const INITIAL_TIME_ATTACK_MOVES = 20;
+        const BONUS_MOVES = 5;
+        const TOTAL_SHIPS = 7; 
+        const NEIGHBORS = [
+            [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]
+        ];
+
+        const SHIP_DEFINITIONS = [
+            { id: 1, name: "Alpha" }, { id: 2, name: "Beta" }, { id: 3, name: "Gamma" },
+            { id: 4, name: "Delta" }, { id: 5, name: "Epsilon" }, { id: 6, name: "Zeta" },
+            { id: 7, name: "Eta" },
+        ];
+        
+        let gameState = {
+            board: [],
+            hits: [],
+            ships: [],
+            movesMade: 0,
+            movesRemaining: 0,
+            mode: 'standard',
+            isGameOver: true,
+            shipsSunk: 0, 
+        };
+
+        const isInBounds = (r, c) => r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
+        const manhattanDistance = (r1, c1, r2, c2) => Math.abs(r1 - r2) + Math.abs(c1 - c2);
+
+        const isValidPlacement = (r, c, existingShipCells) => {
+            if (!isInBounds(r, c)) return false;
+
+            const occupiedMap = new Set(existingShipCells.map(([r, c]) => `${r},${c}`));
+
+            if (occupiedMap.has(`${r},${c}`)) return false; 
+
+            for (const [dr, dc] of NEIGHBORS) {
+                const nr = r + dr;
+                const nc = c + dc; 
+                if (occupiedMap.has(`${nr},${nc}`)) return false; 
+            }
+            return true;
+        };
+
+        function generateBoard() {
+            let placedShips = [];
+            let allShipCells = [];
+            const MAX_TOTAL_ATTEMPTS = 5000;
+            let totalAttempts = 0;
+
+            while (placedShips.length < TOTAL_SHIPS && totalAttempts < MAX_TOTAL_ATTEMPTS) {
+                const shipDef = SHIP_DEFINITIONS[placedShips.length]; 
+                let placed = false;
+                let attempts = 0;
+
+                while (!placed && attempts < 500) {
+                    const r = Math.floor(Math.random() * BOARD_SIZE);
+                    const c = Math.floor(Math.random() * BOARD_SIZE);
+
+                    if (isValidPlacement(r, c, allShipCells)) {
+                        const newShip = {
+                            id: shipDef.id,
+                            name: shipDef.name,
+                            sunk: false,
+                            cells: [{ r, c, hit: false }],
+                        };
+                        placedShips.push(newShip);
+                        allShipCells.push([r, c]);
+                        placed = true;
+                    }
+                    attempts++;
+                    totalAttempts++;
+                }
+
+                if (!placed) {
+                    console.warn(`Hiba a hajók lerakásánál ${shipDef.name}. Újraindítás`); 
+                    return generateBoard();
+                }
+            }
+
+            if (placedShips.length !== TOTAL_SHIPS) { 
+                 gameState.isGameOver = true;
+                 return;
+            }
+
+            const board = Array(BOARD_SIZE).fill(0).map(() => Array(BOARD_SIZE).fill(null));
+            placedShips.forEach((ship, index) => {
+                const cell = ship.cells[0];
+                board[cell.r][cell.c] = index;
+            });
+
+            gameState.board = board;
+            gameState.ships = placedShips;
+            gameState.shipsSunk = 0;
+        }
+
+
+        const calculateMinDistance = (r, c) => {
+            let minDistance = Infinity;
+
+            gameState.ships.forEach(ship => {
+                if (!ship.sunk) {
+                    const cell = ship.cells[0]; 
+                    const dist = manhattanDistance(r, c, cell.r, cell.c);
+                    if (dist < minDistance) minDistance = dist;
+                }
+            });
+            return minDistance === Infinity ? 0 : minDistance;
+        };
+
+
+        function handleProbe(r, c) {
+            if (gameState.isGameOver || gameState.hits[r][c]) return;
+            const cellElement = document.getElementById(`cell-${r}-${c}`); 
+
+            gameState.movesMade++;
+            if (gameState.mode === 'timeAttack') gameState.movesRemaining--;
+            gameState.hits[r][c] = true;
+
+            const shipIndex = gameState.board[r][c];
+
+            if (shipIndex !== null) {
+                const ship = gameState.ships[shipIndex];
+                if (!ship.sunk) {
+                    ship.sunk = true;
+                    gameState.shipsSunk++;
+
+                    cellElement.classList.remove('bg-gray-900');
+                    cellElement.classList.add('sunk', 'probed', 'animate-pulse');
+                    cellElement.innerHTML = '🚀';
+
+                    setTimeout(() => cellElement.classList.remove('animate-pulse'), 500); 
+
+                    const bonusMsg = gameState.mode === 'timeAttack' ? ` (+${BONUS_MOVES} Moves)` : '';
+                    showModal(`Megtaláltál egy hajót! ${bonusMsg} - ${ship.name}.`, false); 
+                    
+                    if (gameState.mode === 'timeAttack') {
+                        gameState.movesRemaining += BONUS_MOVES;
+                    }
+                }
+            } else {
+                const distance = calculateMinDistance(r, c);
+                cellElement.classList.add('miss', 'probed');
+                cellElement.innerHTML = distance;
+            }
+
+            updateStatusDisplay();
+            checkGameEndConditions();
+        }
+
+        const checkGameEndConditions = () => {
+            if (gameState.shipsSunk === TOTAL_SHIPS) {
+                gameState.isGameOver = true; 
+                showModal(`Nyertél/ Megtaláltad az összes ${TOTAL_SHIPS} hajót ${gameState.movesMade} lépésbből.`, true); 
+            } 
+            else if (gameState.mode === 'timeAttack' && gameState.movesRemaining <= 0) {
+                gameState.isGameOver = true;
+                showModal(`Meghaltál! Kifogytál a lépésekből. A megtalált hajók száma: ${gameState.shipsSunk}/${TOTAL_SHIPS}.`, true);
+            }
+        };
+
+        // --- UI Rendering ---
+
+        const renderBoard = () => {
+            const boardContainer = document.getElementById('gameBoard');
+            boardContainer.innerHTML = '';
+            boardContainer.classList.remove('disabled');
+            gameState.hits = Array(BOARD_SIZE).fill(0).map(() => Array(BOARD_SIZE).fill(false));
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell bg-gray-900'; 
+                    cell.id = `cell-${r}-${c}`; 
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+                    cell.onclick = () => handleProbe(r, c);
+                    boardContainer.appendChild(cell); 
+                }
+            }
+        };
+
+        const updateStatusDisplay = () => {
+            document.getElementById('movesMadeDisplay').textContent = gameState.movesMade;
+            document.getElementById('shipsRemainingDisplay').textContent = `${TOTAL_SHIPS - gameState.shipsSunk}`; 
+            document.getElementById('modeDisplay').textContent = gameState.mode === 'timeAttack' ? 'Time Attack' : 'Standard';
+
+            const timeAttackStats = document.getElementById('timeAttackStats');
+            if (gameState.mode === 'timeAttack') {
+                const colorClass = gameState.movesRemaining <= 5 ? 'text-red-500' : 'text-green-300';
+                timeAttackStats.innerHTML = `
+                    <div class="flex justify-between items-center text-lg py-1 border-b border-gray-700">
+                        <span class="text-gray-400">Moves Remaining:</span>
+                        <span class="font-bold ${colorClass}">${gameState.movesRemaining}</span>
+                    </div>
+                `;
+            } else {
+                timeAttackStats.innerHTML = '';
+            }
+        };
+
+        const hideModal = () => document.getElementById('customModal').classList.add('hidden');
+
+        function showModal(message, isEndGame) {
+            const modal = document.getElementById('customModal');
+            const buttonHtml = isEndGame ? `
+                <button onclick="hideModal(); startGame(gameState.mode);" class="mt-4 py-2 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 transition font-bold text-white">
+                    Új játék
+                </button>
+            ` : `
+                <button onclick="hideModal()" class="mt-4 py-2 px-4 rounded-lg bg-green-600 hover:bg-green-700 transition font-bold text-white">
+                    Folytatás
+                </button>
+            `;
+
+            modal.innerHTML = `
+                <div class="message-box">
+                    <p class="text-xl font-semibold mb-4">${message}</p>
+                    ${buttonHtml}
+                </div>
+            `;
+            modal.classList.remove('hidden');
+        }
+
+        function startGame(mode) {
+            gameState.isGameOver = false;
+            gameState.movesMade = 0;
+            gameState.mode = mode;
+            gameState.movesRemaining = mode === 'timeAttack' ? INITIAL_TIME_ATTACK_MOVES : 0; 
+
+            generateBoard();
+            renderBoard();
+            updateStatusDisplay();
+        }
+
+        window.onload = () => startGame('standard');
+    </script>
+</body>
+</html>
